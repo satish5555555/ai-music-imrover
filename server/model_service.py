@@ -213,6 +213,7 @@ class MultiResolutionSTFTLoss(nn.Module):
 # Training
 # -------------------------
 def train_model(data_dir="/app/server/uploads",
+                mode: str = "music",
                 epochs=30,
                 batch_size=2,
                 lr=3e-4,
