@@ -1,13 +1,28 @@
-version: "3.8"
+version: "3.9"
+
 services:
   ai-music-improver:
     build: .
+    image: ai-music-improver
+    container_name: ai-music-improver
     ports:
       - "8000:8000"
     volumes:
       - ./server/uploads:/app/server/uploads
+      - ./server/checkpoints:/app/server/checkpoints
+    environment:
+      # Relax SSL validation for both npm and pip (safe for dev)
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
+      PIP_NO_VERIFY: "1"
+      PYTHONWARNINGS: "ignore"
     deploy:
       resources:
         reservations:
           devices:
-            - capabilities: [gpu]
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # If your Docker setup doesn’t have GPUs, it will run on CPU automatically.
+    # Uncomment the next line for deterministic CPU fallback:
+    # runtime: "runc"
+

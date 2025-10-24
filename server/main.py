@@ -60,6 +60,32 @@ def submit_job(payload: dict):
     thread.start()
     return {"job_id": job_id}
 
+
+@app.post("/api/train")
+def train_job(background_tasks: BackgroundTasks, payload: dict):
+    """Trigger background model training using uploaded music"""
+    mode = payload.get("mode", "music")
+    data_dir = payload.get("data_dir", str(UPLOAD_DIR))
+    job_id = uuid.uuid4().hex[:12]
+    out_path = OUTPUT_DIR / f"training_output_{job_id}.txt"
+    jobs[job_id] = {"status": "queued", "input": data_dir, "output": str(out_path), "error": None}
+
+    def _run_train_job():
+        jobs[job_id]["status"] = "running"
+        try:
+            from model_service import train_model
+            train_model(data_dir=data_dir, mode=mode)
+            with open(out_path, "w") as f:
+                f.write(f"Training complete at {time.ctime()}\n")
+            jobs[job_id]["status"] = "done"
+        except Exception as e:
+            jobs[job_id]["status"] = "error"
+            jobs[job_id]["error"] = str(e)
+
+    background_tasks.add_task(_run_train_job)
+    return {"job_id": job_id, "message": "Training started"}
+
+
 @app.get("/api/status/{job_id}")
 def job_status(job_id: str):
     if job_id not in jobs:
