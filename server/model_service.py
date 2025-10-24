@@ -3,6 +3,7 @@ import os
 import math
 from pathlib import Path
 from typing import List, Tuple, Optional
+import random
 
 import torch
 import torch.nn as nn
@@ -35,18 +36,22 @@ def load_audio_high_quality(file_path: str, target_sr: int = 48000, max_len: Opt
             waveform = F.pad(waveform, (0, pad_len))
     return waveform, target_sr
 
+
 def rms(x: torch.Tensor, eps=1e-9):
     return torch.sqrt(torch.mean(x**2, dim=-1, keepdim=True) + eps)
+
 
 def match_rms(x: torch.Tensor, ref: torch.Tensor):
     xr = rms(x)
     rr = rms(ref)
     return x * (rr / (xr + 1e-9))
 
+
 def soft_limiter(x: torch.Tensor, threshold=0.98):
     # soft clipping via tanh to avoid harsh distortion
     x = x / threshold
     return threshold * torch.tanh(x)
+
 
 # -------------------------
 # Model: Multi-scale Residual UNet (1D)
@@ -66,6 +71,7 @@ class ResBlock1D(nn.Module):
     def forward(self, x):
         return self.act(x + self.net(x))
 
+
 class DownBlock(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
@@ -78,6 +84,7 @@ class DownBlock(nn.Module):
 
     def forward(self, x):
         return self.conv(x)
+
 
 class UpBlock(nn.Module):
     def __init__(self, in_ch, out_ch):
@@ -100,6 +107,7 @@ class UpBlock(nn.Module):
                 x = x[:, :, :skip.size(-1)]
         x = x + skip  # residual merge
         return self.net(x)
+
 
 class MultiScaleUNet(nn.Module):
     """
@@ -156,6 +164,7 @@ class MultiScaleUNet(nn.Module):
         out = self.out_conv(cur)
         return out
 
+
 # -------------------------
 # Multi-resolution STFT loss
 # -------------------------
@@ -175,7 +184,7 @@ class MultiResolutionSTFTLoss(nn.Module):
         return torch.stft(x, n_fft=n_fft, hop_length=hop_length, win_length=win_length, window=window.to(x.device), return_complex=True)
 
     def forward(self, x, y):
-        # x,y: (B, C, T)  waveform in [-1,1]
+        # x,y: (B, C, T)
         loss_sc = 0.0
         loss_mag = 0.0
         for n_fft, hop, win in zip(self.fft_sizes, self.hop_sizes, self.win_lengths):
@@ -184,17 +193,14 @@ class MultiResolutionSTFTLoss(nn.Module):
                 self.window_cache[key] = torch.hann_window(win)
             win_tensor = self.window_cache[key]
 
-            # compute complex STFT per channel (flatten batch+channel)
             B, C, T = x.shape
             x_ = x.view(B*C, T)
             y_ = y.view(B*C, T)
 
             X = self._stft(x_, n_fft, hop, win, win_tensor)
             Y = self._stft(y_, n_fft, hop, win, win_tensor)
-            # magnitudes
             Xm = torch.abs(X)
             Ym = torch.abs(Y)
-            # spectral convergence
             sc = torch.norm(Ym - Xm, p='fro') / (torch.norm(Ym, p='fro') + 1e-9)
             mag_l1 = torch.mean(torch.abs(Ym - Xm))
             loss_sc += sc
@@ -202,8 +208,9 @@ class MultiResolutionSTFTLoss(nn.Module):
         loss = loss_sc + 0.5 * loss_mag
         return loss
 
+
 # -------------------------
-# Training & Inference
+# Training
 # -------------------------
 def train_model(data_dir="/app/server/uploads",
                 epochs=30,
@@ -215,7 +222,6 @@ def train_model(data_dir="/app/server/uploads",
                 ckpt_dir: str = None):
     """
     Train model with multi-res STFT loss and waveform L1.
-    Uses mixed precision (AMP) if CUDA available.
     """
     data_dir = Path(data_dir)
     files = list(data_dir.glob("*.wav")) + list(data_dir.glob("*.mp3"))
@@ -238,36 +244,29 @@ def train_model(data_dir="/app/server/uploads",
 
     for epoch in range(epochs):
         total_loss = 0.0
-        # shuffle files each epoch
-        random_order = files.copy()
-        import random
-        random.shuffle(random_order)
-        for idx in range(0, len(random_order), batch_size):
-            batch_files = random_order[idx: idx + batch_size]
+        random.shuffle(files)
+        for idx in range(0, len(files), batch_size):
+            batch_files = files[idx: idx + batch_size]
             wave_batch = []
             for f in batch_files:
-                wav, sr = load_audio_high_quality(str(f), target_sr=target_sr, max_len=None, stereo=True)
-                # ensure stereo (2,ch)
+                wav, sr = load_audio_high_quality(str(f), target_sr=target_sr, stereo=True)
                 if wav.shape[0] == 1:
                     wav = wav.repeat(2, 1)
-                # random crop for segment training
                 if wav.shape[1] > seg_len:
                     start = random.randint(0, wav.shape[1] - seg_len)
                     wav = wav[:, start:start + seg_len]
                 else:
                     wav = F.pad(wav, (0, max(0, seg_len - wav.shape[1])))
                 wave_batch.append(wav)
-            x = torch.stack(wave_batch, dim=0).to(device)  # (B, C, T)
+            x = torch.stack(wave_batch, dim=0).to(device)
 
-            # augmentation: small noise + random gain
-            noise = 0.0005 * torch.randn_like(x).to(device)
+            noise = 0.0005 * torch.randn_like(x)
             gains = (torch.randn(x.size(0), 1, 1, device=device) * 0.05 + 1.0)
             noisy = x * gains + noise
 
             optimizer.zero_grad()
             with torch.cuda.amp.autocast(enabled=(device.startswith("cuda"))):
                 out = model(noisy)
-                # length safety
                 if out.size(-1) != x.size(-1):
                     out = F.pad(out, (0, max(0, x.size(-1) - out.size(-1))))
                     out = out[:, :, :x.size(-1)]
@@ -277,7 +276,6 @@ def train_model(data_dir="/app/server/uploads",
                 loss = loss_wav * 0.8 + loss_spec * 1.2
 
             scaler.scale(loss).backward()
-            # gradient clipping
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 3.0)
             scaler.step(optimizer)
@@ -288,23 +286,18 @@ def train_model(data_dir="/app/server/uploads",
         scheduler.step()
         avg_loss = total_loss / math.ceil(len(files) / batch_size)
         print(f"[TRAIN] Epoch {epoch+1}/{epochs}  AvgLoss={avg_loss:.6f}")
-        # save periodic checkpoint
         ckpt_path = ckpt_dir / f"model_epoch{epoch+1}.pt"
         torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "epoch": epoch+1}, ckpt_path)
 
-    # save final
     final_ckpt = ckpt_dir / "trained_model_hifi_multiscale.pt"
     torch.save(model.state_dict(), final_ckpt)
     print(f"[TRAIN] ✅ Saved final model to {final_ckpt}")
 
+
 # -------------------------
-# Inference — overlap-add, RMS match, soft limiter
+# Inference — overlap-add, RMS match, limiter
 # -------------------------
 def _overlap_add_infer(model: nn.Module, waveform: torch.Tensor, chunk_size: int, hop: int, device: str):
-    """
-    waveform: (C, T)
-    returns: (C, T)
-    """
     model.to(device)
     model.eval()
     C, T = waveform.shape
@@ -315,27 +308,19 @@ def _overlap_add_infer(model: nn.Module, waveform: torch.Tensor, chunk_size: int
 
     out = torch.zeros_like(waveform)
     weight = torch.zeros_like(waveform)
-
     window = torch.hann_window(chunk_size, device=device)
 
     with torch.no_grad():
         for start in range(0, T - hop + 1, hop):
-            seg = waveform[:, start:start + chunk_size].unsqueeze(0).to(device)  # (1,C,L)
-            # ensure shape (B,C,T) for model as used in training
-            seg = seg.to(device)
-            enhanced = model(seg)
-            enhanced = enhanced.squeeze(0).cpu()
-            # apply window
+            seg = waveform[:, start:start + chunk_size].unsqueeze(0).to(device)
+            enhanced = model(seg).squeeze(0).cpu()
             win = window.unsqueeze(0)
             out[:, start:start + chunk_size] += enhanced * win
             weight[:, start:start + chunk_size] += win
-    weight = weight.clamp_min(1e-9)
-    return out / weight
+    return out / weight.clamp_min(1e-9)
+
 
 def improve_music_or_audio(input_path: str, output_path: str, mode: str = "auto", target_sr: int = 48000, device: Optional[str] = None):
-    """
-    Enhance stereo audio track and export high-quality WAV/MP3.
-    """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model = MultiScaleUNet(in_ch=2, base_ch=64, num_scales=5).to(device)
     ckpt_path = Path(__file__).parent / "checkpoints" / "trained_model_hifi_multiscale.pt"
@@ -345,26 +330,16 @@ def improve_music_or_audio(input_path: str, output_path: str, mode: str = "auto"
     model.eval()
 
     waveform, sr = load_audio_high_quality(input_path, target_sr=target_sr, stereo=True)
-    # ensure shape (C, T)
     if waveform.shape[0] == 1:
         waveform = waveform.repeat(2, 1)
 
-    # inference with overlap-add
-    chunk_sec = 3.0
-    chunk_size = int(chunk_sec * target_sr)
-    hop = chunk_size // 2  # 50% overlap
+    chunk_size = int(3.0 * target_sr)
+    hop = chunk_size // 2
     enhanced = _overlap_add_infer(model, waveform, chunk_size, hop, device)
-
-    # length match
     enhanced = enhanced[:, :waveform.shape[1]]
 
-    # post-processing: lowpass to remove potential high-band artifacts
     enhanced = torchaudio.functional.lowpass_biquad(enhanced, target_sr, 20000)
-
-    # match RMS of original to preserve perceived loudness
     enhanced = match_rms(enhanced, waveform)
-
-    # soft limiter + small dithering to int16
     enhanced = soft_limiter(enhanced, threshold=0.98)
     enhanced = enhanced / enhanced.abs().max().clamp_min(1e-6)
     int16_audio = (enhanced * 32767.0).short()
@@ -375,7 +350,6 @@ def improve_music_or_audio(input_path: str, output_path: str, mode: str = "auto"
 
     ext = Path(output_path).suffix.lower()
     if ext == ".mp3":
-        # Use ffmpeg to create MP3 if requested (must be available)
         os.system(f"ffmpeg -y -i {temp_wav} -codec:a libmp3lame -b:a 320k {output_path} >/dev/null 2>&1")
         os.remove(temp_wav)
     else:
@@ -384,28 +358,44 @@ def improve_music_or_audio(input_path: str, output_path: str, mode: str = "auto"
 
     print(f"[IMPROVE] ✅ Saved high-fidelity enhanced audio to {output_path}")
 
+
 # -------------------------
-# Quick CLI
+# CLI Interface (fixed)
 # -------------------------
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers(dest="cmd")
-    t = sub.add_parser("train")
+    parser = argparse.ArgumentParser(description="AI Music Improver — train or enhance audio.")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # Training command
+    t = sub.add_parser("train", help="Train the model on uploaded audio files.")
     t.add_argument("--data_dir", default="./uploads")
     t.add_argument("--epochs", type=int, default=30)
     t.add_argument("--batch_size", type=int, default=2)
     t.add_argument("--lr", type=float, default=3e-4)
     t.add_argument("--target_sr", type=int, default=48000)
 
-    i = sub.add_parser("improve")
-    i.add_argument("input_path")
-    i.add_argument("output_path")
+    # Inference command
+    i = sub.add_parser("improve", help="Enhance a single audio track.")
+    i.add_argument("input_path", help="Input audio file path (.wav or .mp3)")
+    i.add_argument("output_path", help="Output enhanced file path (.wav or .mp3)")
     i.add_argument("--target_sr", type=int, default=48000)
 
     args = parser.parse_args()
+
     if args.cmd == "train":
-        train_model(data_dir=args.data_dir, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, target_sr=args.target_sr)
+        train_model(
+            data_dir=args.data_dir,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            target_sr=args.target_sr,
+        )
+
     elif args.cmd == "improve":
-        improve_music_or_audio(args.inpu_
+        improve_music_or_audio(
+            input_path=args.input_path,
+            output_path=args.output_path,
+            target_sr=args.target_sr,
+        )
 
