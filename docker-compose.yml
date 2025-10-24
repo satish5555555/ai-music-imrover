@@ -1,0 +1,13 @@
+version: "3.8"
+services:
+  ai-music-improver:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./server/uploads:/app/server/uploads
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]

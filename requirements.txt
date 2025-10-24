@@ -1,0 +1,13 @@
+flask
+flask-cors
+torch>=2.2
+torchaudio
+pretty_midi
+numpy
+tqdm
+PyYAML
+python-dotenv
+soundfile
+
+fastapi
+uvicorn[standard]

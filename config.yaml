@@ -1,0 +1,27 @@
+data:
+  midi_dir: "./server/uploads"
+  time_step: 0.125
+  min_pitch: 21
+  max_pitch: 108
+
+training:
+  seq_len: 256
+  batch_size: 16
+  epochs: 20
+  lr: 1e-4
+  device: "auto"
+
+model:
+  d_model: 256
+  nhead: 8
+  num_layers: 4
+  dim_feedforward: 1024
+  dropout: 0.1
+
+audio_sr:
+  upsample_factor: 4
+  sample_rate: 16000
+
+generation:
+  temperature: 1.0
+  top_k: 8

@@ -1,0 +1,8 @@
+body { font-family: Inter, system-ui, Arial, sans-serif; padding: 20px; background:#f6f7fb; color:#111 }
+.container { max-width:900px; margin: 0 auto; background:white; padding:20px; border-radius:12px; box-shadow: 0 6px 20px rgba(0,0,0,0.06) }
+.upload-form { display:flex; gap:10px; align-items:center; margin-bottom:10px }
+.upload-form input { flex:1 }
+.btn { margin-left:10px; padding:6px 10px; background:#2b6cff; color:white; border-radius:6px; text-decoration:none }
+.output-card { border:1px solid #eee; padding:10px; margin:10px 0; border-radius:8px; display:flex; gap:10px; align-items:center }
+.fname { flex:1 }
+.player button { margin-right:8px }
