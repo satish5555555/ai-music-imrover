@@ -1,5 +1,5 @@
 # =============================================================
-# STAGE 1 — Build Web UI (React)
+# STAGE 1 — Build Web UI (React / Vite)
 # =============================================================
 FROM node:18-alpine AS ui
 WORKDIR /app/webui
@@ -8,7 +8,6 @@ WORKDIR /app/webui
 COPY webui/package.json webui/package-lock.json* ./
 
 # --- SSL / Proxy Safe Config for npm ---
-# Disable strict SSL and set retry policies (safe for dev & corporate proxies)
 RUN npm config set strict-ssl false
 RUN npm config set registry "https://registry.npmjs.org/"
 RUN npm config set fetch-retries 5
@@ -18,10 +17,17 @@ RUN npm config set fetch-retry-maxtimeout 60000
 RUN if [ ! -f package-lock.json ]; then npm install --package-lock-only; fi
 RUN npm ci || npm install
 
-# Copy rest of UI and build production bundle
+# Copy rest of the frontend source
 COPY webui/ .
-RUN npm run build
 
+# --- Force Vite install if missing (prevents 'vite: command not found') ---
+RUN npm install vite --save-dev || true
+
+# --- Build frontend using Vite ---
+RUN echo "🏗️  Building frontend..." && npm run build || (npm run build)
+
+# --- Verify that dist folder was created ---
+RUN test -d dist && ls -la dist || (echo "❌ Vite build failed — dist missing!" && exit 1)
 
 # =============================================================
 # STAGE 2 — Backend (FastAPI + PyTorch)
@@ -55,7 +61,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # =============================================================
 # FIXED SECTION — Install PyTorch safely behind SSL proxies
 # =============================================================
-# We use PyPI directly (not download.pytorch.org) to avoid strict SSL chains
 RUN echo "Installing PyTorch and Torchaudio safely..." && \
     pip install torch==2.3.1 torchaudio==2.3.1 --no-cache-dir \
         --trusted-host pypi.org \
@@ -76,7 +81,7 @@ RUN echo "Installing PyTorch and Torchaudio safely..." && \
         --timeout 300)
 
 # =============================================================
-# Copy backend source and prebuilt UI
+# Copy backend source and built UI
 # =============================================================
 COPY server/ ./server/
 COPY config.yaml ./
@@ -87,6 +92,13 @@ WORKDIR /app/server
 # Expose FastAPI port
 EXPOSE 8000
 
-# Start backend
+# =============================================================
+# HEALTHCHECK — ensures container is marked healthy only if API works
+# =============================================================
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -f http://localhost:8000/health || exit 1
+
+# =============================================================
+# Start backend (production mode)
+# =============================================================
 CMD ["python", "run_uvicorn.py"]
 

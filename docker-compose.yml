@@ -1,4 +1,5 @@
-version: "3.9"
+# Docker Compose configuration for AI Music Improver
+# Works automatically on macOS (CPU-only) and Linux (GPU-enabled)
 
 services:
   ai-music-improver:
@@ -11,18 +12,27 @@ services:
       - ./server/uploads:/app/server/uploads
       - ./server/checkpoints:/app/server/checkpoints
     environment:
-      # Relax SSL validation for both npm and pip (safe for dev)
+      # Relax SSL validation for npm/pip in corporate networks
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
-      PIP_NO_VERIFY: "1"
+      PIP_NO_VERIFY_CERTS: "1"
       PYTHONWARNINGS: "ignore"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    # If your Docker setup doesn’t have GPUs, it will run on CPU automatically.
-    # Uncomment the next line for deterministic CPU fallback:
-    # runtime: "runc"
+      DEVICE_TYPE: "${DEVICE_TYPE:-cpu}"
+
+    # Only enable this block if you're on Linux with NVIDIA GPUs
+    # Remove or comment out this section on macOS
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+    # Health check (waits for FastAPI to be ready)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 

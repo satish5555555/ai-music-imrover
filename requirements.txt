@@ -8,6 +8,6 @@ tqdm
 PyYAML
 python-dotenv
 soundfile
-
+python-multipart
 fastapi
 uvicorn[standard]
