@@ -6,8 +6,10 @@ RUN npm ci
 COPY webui/ .
 RUN npm run build
 
-# Stage 2: Backend (Flask + PyTorch)
-FROM nvidia/cuda:12.2.0-cudnn8-runtime-ubuntu22.04
+# Stage 2: Backend (FastAPI + PyTorch CPU)
+# Use PyTorch official image that supports both x86_64 and arm64
+FROM pytorch/pytorch:2.2.2-cpu
+
 WORKDIR /app
 COPY requirements.txt .
 RUN apt-get update && apt-get install -y ffmpeg libsndfile1 && rm -rf /var/lib/apt/lists/*
@@ -19,4 +21,5 @@ COPY --from=ui /app/webui/dist ./server/static
 
 WORKDIR /app/server
 EXPOSE 8000
-CMD ["python", "app.py"]
+CMD ["python", "run_uvicorn.py"]
+
